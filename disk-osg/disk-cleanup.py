@@ -9,7 +9,7 @@ import argparse
 import subprocess
 
 protected_dirs = [ '/osgpool/hallb/clas12/gemc' , '/volatile/clas12/osg2' ]
-default_ignores = [ '^.*\.hipo$', '^.*/job_[0-9]+/nodeScript.sh$' ]
+default_ignores = [ '^.*\.hipo$', '^.*/job_[0-9]+/[0-9a-zA-Z\.\-_]+$' ]
 default_trashes = [ '.*\.root$', '.*\.evio$', '^core\.*' ]
 
 cli = argparse.ArgumentParser(description='''Utility for filesystem cleanup.

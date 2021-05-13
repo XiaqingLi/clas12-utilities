@@ -21,6 +21,9 @@ import datetime
 import subprocess
 import collections
 
+dedicated_sites = [ 'CNAF', 'SGridGLA' ]
+priority_sites = [ 'SU-ITS', 'UConn-HPS', 'UConn', 'MIT' , 'GRIF' ]
+
 json_format =  {'indent':2, 'separators':(',',': '), 'sort_keys':True}
 log_regex = '/([a-z]+)/job_([0-9]+)/log/job\.([0-9]+)\.([0-9]+)\.'
 job_states = {0:'U', 1:'I', 2:'R', 3:'X', 4:'C', 5:'H', 6:'E'}
@@ -36,6 +39,7 @@ cvmfs_error_strings = [
 ]
 
 ###########################################################
+# Interactions with condor:
 ###########################################################
 
 condor_data = collections.OrderedDict()
@@ -49,11 +53,13 @@ def condor_query(constraints=[], opts=[], hours=0, completed=False):
   condor_munge()
 
 def condor_read(path):
+  '''Load condor data from a JSON file'''
   global condor_data
   condor_data = json.load(open(path,'r'))
   condor_munge()
 
 def condor_write(path):
+  '''Write condor data to a JSON file'''
   with open(path,'w') as f:
     f.write(json.dumps(condor_data, **json_format))
 
@@ -75,6 +81,7 @@ def condor_add_json(cmd):
     sys.exit(1)
 
 def condor_vacate_job(job):
+  '''Vacate a job, e.g. send it from running to idle state'''
   cmd = ['condor_vacate_job', '-fast', job.get('condorid')]
   response = None
   try:
@@ -152,15 +159,17 @@ def condor_calc_wallhr(job):
   return ret
 
 ###########################################################
+# Analysis of condor data:
 ###########################################################
 
 def condor_yield(args):
+  '''An iterator that applies matching criteria on condor_data'''
   for condor_id,job in condor_data.items():
     if condor_match(job, args):
       yield (condor_id, job)
 
 def condor_match(job, args):
-  ''' Apply job constraints, on top of those condor knows about'''
+  '''Apply job constraints, on top of those condor knows about'''
   if len(args.condor)>0 and job['condor'] not in args.condor:
     if job['condor'].split('.').pop(0) not in args.condor:
       return False
@@ -190,6 +199,7 @@ def condor_match(job, args):
   return True
 
 def get_status_key(job):
+  '''Make a job state name for human consumption'''
   if job_states[job['JobStatus']] == 'H':
     return 'held'
   elif job_states[job['JobStatus']] == 'I':
@@ -202,12 +212,14 @@ def get_status_key(job):
     return 'other'
 
 def average(alist):
+  '''Get the average of a list'''
   if len(alist) > 0:
     return '%.1f' % (sum(alist) / len(alist))
   else:
     return null_field
 
 def stddev(alist):
+  '''Get the standard deviation of a list'''
   if len(alist) > 0:
     m = average(alist)
     s = sum([ (x-float(m))*(x-float(m)) for x in alist ])
@@ -215,51 +227,56 @@ def stddev(alist):
   else:
     return null_field
 
+condor_cluster_data = None
 def condor_cluster_summary(args):
   '''Tally jobs by condor's ClusterId'''
-  ret = collections.OrderedDict()
-  for condor_id,job in condor_yield(args):
-    cluster_id = condor_id.split('.').pop(0)
-    if cluster_id not in ret:
-      ret[cluster_id] = job.copy()
-      ret[cluster_id].update(job_counts.copy())
-    ret[cluster_id][get_status_key(job)] += 1
-    ret[cluster_id]['done'] = ret[cluster_id]['TotalSubmitProcs']
-    ret[cluster_id]['done'] -= ret[cluster_id]['held']
-    ret[cluster_id]['done'] -= ret[cluster_id]['idle']
-    ret[cluster_id]['done'] -= ret[cluster_id]['run']
-  return ret
+  global condor_cluster_data
+  if condor_cluster_data is None:
+    x = collections.OrderedDict()
+    for condor_id,job in condor_yield(args):
+      cluster_id = condor_id.split('.').pop(0)
+      if cluster_id not in x:
+        x[cluster_id] = job.copy()
+        x[cluster_id].update(job_counts.copy())
+      x[cluster_id][get_status_key(job)] += 1
+      x[cluster_id]['done'] = x[cluster_id]['TotalSubmitProcs']
+      x[cluster_id]['done'] -= x[cluster_id]['held']
+      x[cluster_id]['done'] -= x[cluster_id]['idle']
+      x[cluster_id]['done'] -= x[cluster_id]['run']
+      condor_cluster_data = x
+  return condor_cluster_data
 
+condor_site_data = None
 def condor_site_summary(args):
   '''Tally jobs by site.  Note, including completed jobs
   here is only possible if condor_history is included.'''
-  sites = collections.OrderedDict()
-  for condor_id,job in condor_yield(args):
-    site = job.get('MATCH_GLIDEIN_Site')
-    if site not in sites:
-      sites[site] = job.copy()
-      sites[site].update(job_counts.copy())
-      sites[site]['wallhr'] = []
-      sites[site]['attempt'] = []
-    sites[site]['attempt'].append(job['NumJobStarts'])
-    sites[site]['total'] += 1
-    sites[site][get_status_key(job)] += 1
-    if args.running or job_states[job['JobStatus']] == 'C':
-      try:
-        x = float(job.get('wallhr'))
-        sites[site]['wallhr'].append(x)
-      except:
-        pass
-  for site in sites.keys():
-    sites[site]['ewallhr'] = stddev(sites[site]['wallhr'])
-    sites[site]['eattempt'] = stddev(sites[site]['attempt'])
-    sites[site]['wallhr'] = average(sites[site]['wallhr'])
-    sites[site]['attempt'] = average(sites[site]['attempt'])
-    if args.hours <= 0:
-      sites[site]['done'] = null_field
-  return sort_dict(sites, 'total')
+  global condor_site_data
+  if condor_site_data is None:
+    sites = collections.OrderedDict()
+    for condor_id,job in condor_yield(args):
+      site = job.get('MATCH_GLIDEIN_Site')
+      if site not in sites:
+        sites[site] = job.copy()
+        sites[site].update(job_counts.copy())
+        sites[site]['wallhr'] = []
+      sites[site]['total'] += 1
+      sites[site][get_status_key(job)] += 1
+      if args.running or job_states[job['JobStatus']] == 'C':
+        try:
+          x = float(job.get('wallhr'))
+          sites[site]['wallhr'].append(x)
+        except:
+          pass
+    for site in sites.keys():
+      sites[site]['ewallhr'] = stddev(sites[site]['wallhr'])
+      sites[site]['wallhr'] = average(sites[site]['wallhr'])
+      if args.hours <= 0:
+        sites[site]['done'] = null_field
+    condor_site_data = sort_dict(sites, 'total')
+  return condor_site_data
 
 ###########################################################
+# General utility stuff:
 ###########################################################
 
 def sort_dict(dictionary, subkey):
@@ -284,6 +301,7 @@ def sort_dict(dictionary, subkey):
   return ret
 
 def readlines(filename):
+  '''An iterator to read lines from a file'''
   if filename is not None:
     if os.path.isfile(filename):
       with open(filename, errors='replace') as f:
@@ -312,20 +330,38 @@ def readlines_reverse(filename, max_lines):
       position -= 1
   yield line[::-1]
 
-###########################################################
-###########################################################
-
 def check_cvmfs(job):
-  ''' Return wether a CVMFS error is detected'''
+  '''Return wether a CVMFS error is detected'''
   for line in readlines(job.get('stderr')):
     for x in cvmfs_error_strings:
       if line.find(x) >= 0:
         return False
   return True
 
-# cache generator names to only parse log once per cluster
+def tail_log(job, nlines):
+  '''Print the tails of a job's log files'''
+  print(''.ljust(80,'#'))
+  print(''.ljust(80,'#'))
+  print(job_table.get_header())
+  print(job_table.job_to_row(job))
+  for x in (job['UserLog'],job['stdout'],job['stderr']):
+    if x is not None and os.path.isfile(x):
+      print(''.ljust(80,'>'))
+      print(x)
+      if args.tail > 0:
+        print('\n'.join(reversed(list(readlines_reverse(x, args.tail)))))
+      elif args.tail < 0:
+        for x in readlines(x):
+          print(x)
+
+###########################################################
+# CLAS12-specific stuff:
+###########################################################
+
 generators = {}
 def get_generator(job):
+  '''Get the name of the event generator for a job.  Since this
+  requires parsing logs currently, cache them by ClusterId'''
   if job.get('ClusterId') not in generators:
     generators['ClusterId'] = null_field
     if job.get('UserLog') is not None:
@@ -344,41 +380,42 @@ def get_generator(job):
   return generators.get('ClusterId')
 
 def clas12mon(args):
+  '''Publish current job counts to clas12mon for timelines'''
   data = job_counts.copy()
-  for job in condor_cluster_summary(args).values():
-    for x in data.keys():
-      data[x] += job[x]
+  data['sites'] = {}
+  for site, job in condor_site_summary(args).items():
+    for x in job_counts.keys():
+      try:
+        data[x] += job[x]
+        if x == 'run':
+          if site not in data['sites'] and site is not None:
+            data['sites'][site] = 0
+          data['sites'][site] += job[x]
+      except:
+        pass
+  attempts = []
+  for condor_id,job in condor_yield(args):
+    if job.get('NumJobStarts') is not None:
+      print(job.get('NumJobStarts'))
+      if job.get('NumJobStarts') > 0:
+        attempts.append(job.get('NumJobsStarts'))
+  data['avg_attempts'] = 0
+  if len(attempts) > 0:
+    data['avg_attempts'] = sum(attempts) / len(attempts)
   data.pop('done')
   data.pop('total')
   data['update_ts'] = int(datetime.datetime.now().timestamp())
-  print(json.dumps(data, **json_format))
   return
-  if getpass.getuser() is not 'gemc':
-    print('ERROR:  Only user=gemc can publish to clas12mon.')
-    sys.exit(1)
   auth = os.getenv('HOME')+'/.clas12mon.auth'
   if not os.path.isfile(auth):
     print('ERROR:  Authorization file does not exist:  '+auth)
-  url = 'https://clas12mon.jlab.org/api/OSGEntries'
+    sys.exit(1)
   auth = open(auth).read().strip()
+  url = 'https://clas12mon.jlab.org/api/OSGEntries'
   return requests.post(url, data=data, headers={'Authorization':auth})
 
-def tail_log(job, nlines):
-  print(''.ljust(80,'#'))
-  print(''.ljust(80,'#'))
-  print(job_table.get_header())
-  print(job_table.job_to_row(job))
-  for x in (job['UserLog'],job['stdout'],job['stderr']):
-    if x is not None and os.path.isfile(x):
-      print(''.ljust(80,'>'))
-      print(x)
-      if args.tail > 0:
-        print('\n'.join(reversed(list(readlines_reverse(x, args.tail)))))
-      elif args.tail < 0:
-        for x in readlines(x):
-          print(x)
-
 ###########################################################
+# Table classes for tallying and printing:
 ###########################################################
 
 class Column():
@@ -565,6 +602,9 @@ if __name__ == '__main__':
   if socket.gethostname() != 'scosg16.jlab.org' and not args.input:
     cli.error('You must be on scosg16 unless using the -input option.')
 
+  if args.clas12mon and getpass.getuser() != 'gemc':
+    cli.error('Only user=gemc can use -clas12mon.')
+
   opts, constraints = [], []
 
   if args.held:
@@ -582,7 +622,7 @@ if __name__ == '__main__':
 
   if args.clas12mon:
     clas12mon(args)
-    sys.exit(0)
+    sys.exit(1)
 
   if args.json:
     print(json.dumps(condor_data, **json_format))
@@ -590,7 +630,7 @@ if __name__ == '__main__':
 
   for cid,job in condor_yield(args):
 
-    if args.vacate>0:
+    if args.vacate > 0:
       if job.get('wallhr') is not None:
         if float(job.get('wallhr')) > args.vacate:
           if job_states.get(job['JobStatus']) == 'R':
@@ -607,15 +647,14 @@ if __name__ == '__main__':
     else:
       job_table.add_job(job)
 
-  if args.tail is None and not args.cvmfs:
-    if len(job_table.rows) > 0:
-      if args.summary or args.sitesummary:
-        if args.summary:
-          print(summary_table.add_jobs(condor_cluster_summary(args)))
-        else:
-          print(site_table.add_jobs(condor_site_summary(args)))
+  if len(job_table.rows) > 0:
+    if args.summary or args.sitesummary:
+      if args.summary:
+        print(summary_table.add_jobs(condor_cluster_summary(args)))
       else:
-        print(job_table)
+        print(site_table.add_jobs(condor_site_summary(args)))
+    else:
+      print(job_table)
 
   sys.exit(0)
 

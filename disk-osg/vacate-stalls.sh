@@ -8,7 +8,7 @@ limit=18.5
 
 touch $cache
 
-$dirname/condor-probe.py -vacate $limit >> $cache
+$dirname/condor-probe.py -clas12mon -vacate $limit >> $cache
 
 if ! [ -z $1 ]; then
     tmp=$(mktemp /tmp/gemc/vacate.XXXXXX)
