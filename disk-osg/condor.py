@@ -53,7 +53,7 @@ def condor_read(args):
 
 def condor_write(path):
   with open(path,'w') as f:
-    f.write(json.dumps(condor_data, **json_format))
+    f.write(json.dumps(condor_data, **config.json_format))
 
 def condor_add_json(cmd):
   '''Add JSON condor data to local dictionary'''
@@ -126,7 +126,7 @@ def condor_munge(args):
     job['gemcjob'] = '.'.join(job.get('Args').split()[0:2])
     # setup clas12 job ids and usernames:
     if 'UserLog' in job:
-      m = re.search(log_regex, job['UserLog'])
+      m = re.search(config.log_regex, job['UserLog'])
       if m is not None:
         job['user'] = m.group(1)
         job['gemc'] = m.group(2)
@@ -141,16 +141,16 @@ def condor_munge(args):
     if job.get('LastRemoteHost') is not None:
       job['LastRemoteHost'] = job.get('LastRemoteHost').split('@').pop().split('.').pop(0)
     # calculate cpu utilization for good, completed jobs:
-    if job_states[job['JobStatus']] == 'C' and  float(job.get('wallhr')) > 0:
+    if config.job_states[job['JobStatus']] == 'C' and  float(job.get('wallhr')) > 0:
         job['eff'] = '%.2f'%(float(job.get('RemoteUserCpu')) / float(job.get('wallhr'))/60/60)
     # calculate cumulative cpu efficiency for all jobs:
     if job.get('CumulativeSlotTime') > 0:
-      if job_states[job['JobStatus']] == 'C' or job_states[job['JobStatus']] == 'R':
+      if config.job_states[job['JobStatus']] == 'C' or config.job_states[job['JobStatus']] == 'R':
         job['ceff'] = '%.2f'%(float(job.get('RemoteUserCpu'))/job.get('CumulativeSlotTime'))
       else:
         job['ceff'] = 0
     # get exit code from log files (since it's not always available from condor):
-    if args.parseexit and job_states[job['JobStatus']] == 'H':
+    if args.parseexit and config.job_states[job['JobStatus']] == 'H':
       job['ExitCode'] = tools.get_exit_code(job)
     condor_tally(job)
 
@@ -158,10 +158,10 @@ def condor_tally(job):
   '''Increment total good/bad job counts and times'''
   global condor_data_tallies
   x = condor_data_tallies
-  if job_states[job['JobStatus']] == 'C' or job_states[job['JobStatus']] == 'R':
+  if config.job_states[job['JobStatus']] == 'C' or config.job_states[job['JobStatus']] == 'R':
     if job['NumJobStarts'] > 0:
       x['attempts'].append(job['NumJobStarts'])
-    if job_states[job['JobStatus']] == 'C':
+    if config.job_states[job['JobStatus']] == 'C':
       x['goodattempts'] += 1
       x['goodwall'] += float(job['wallhr'])*60*60
       x['goodcpu'] += job['RemoteUserCpu']
@@ -169,7 +169,7 @@ def condor_tally(job):
       x['badattempts'] += job['NumJobStarts'] - 1
       x['badwall'] += job['CumulativeSlotTime'] - float(job['wallhr'])*60*60
       x['badcpu'] += job['CumulativeRemoteUserCpu'] - job['RemoteUserCpu']
-  elif job['NumJobStarts'] > 0 and job_states[job['JobStatus']] != 'X':
+  elif job['NumJobStarts'] > 0 and config.job_states[job['JobStatus']] != 'X':
       x['badattempts'] += job['NumJobStarts']
       x['badwall'] += job['CumulativeSlotTime']
       x['badcpu'] += job['CumulativeRemoteUserCpu']
@@ -182,7 +182,7 @@ def condor_calc_wallhr(job):
   may be an overestimate of the job itself, depending on how start date
   and end date are triggered, but that's ok.'''
   ret = None
-  if job_states[job['JobStatus']] == 'C' or job_states[job['JobStatus']] == 'R':
+  if config.job_states[job['JobStatus']] == 'C' or config.job_states[job['JobStatus']] == 'R':
     start = job.get('JobCurrentStartDate')
     end = job.get('CompletionDate')
     if start is not None and start > 0:
@@ -272,13 +272,13 @@ def condor_match(job, args):
   elif not exit_matcher.matches(job.get('ExitCode')):
     return False
   if args.plot is False:
-    if args.idle and job_states.get(job['JobStatus']) != 'I':
+    if args.idle and config.job_states.get(job['JobStatus']) != 'I':
       return False
-    if args.completed and job_states.get(job['JobStatus']) != 'C':
+    if args.completed and config.job_states.get(job['JobStatus']) != 'C':
       return False
-    if args.running and job_states.get(job['JobStatus']) != 'R':
+    if args.running and config.job_states.get(job['JobStatus']) != 'R':
       return False
-    if args.held and job_states.get(job['JobStatus']) != 'H':
+    if args.held and config.job_states.get(job['JobStatus']) != 'H':
       return False
   try:
     if int(job['CompletionDate']) > int(args.end.timestamp()):
@@ -288,13 +288,13 @@ def condor_match(job, args):
   return True
 
 def get_status_key(job):
-  if job_states[job['JobStatus']] == 'H':
+  if config.job_states[job['JobStatus']] == 'H':
     return 'held'
-  elif job_states[job['JobStatus']] == 'I':
+  elif config.job_states[job['JobStatus']] == 'I':
     return 'idle'
-  elif job_states[job['JobStatus']] == 'R':
+  elif config.job_states[job['JobStatus']] == 'R':
     return 'run'
-  elif job_states[job['JobStatus']] == 'C':
+  elif config.job_states[job['JobStatus']] == 'C':
     return 'done'
   else:
     return 'other'
@@ -306,7 +306,7 @@ def condor_cluster_summary(args):
     cluster_id = condor_id.split('.').pop(0)
     if cluster_id not in ret:
       ret[cluster_id] = job.copy()
-      ret[cluster_id].update(job_counts.copy())
+      ret[cluster_id].update(config.job_counts.copy())
       ret[cluster_id]['eff'] = []
       ret[cluster_id]['ceff'] = []
       ret[cluster_id]['att'] = []
@@ -338,11 +338,11 @@ def condor_site_summary(args):
     site = job.get('MATCH_GLIDEIN_Site')
     if site not in sites:
       sites[site] = job.copy()
-      sites[site].update(job_counts.copy())
+      sites[site].update(config.job_counts.copy())
       sites[site]['wallhr'] = []
     sites[site]['total'] += 1
     sites[site][get_status_key(job)] += 1
-    if args.running or job_states[job['JobStatus']] == 'C':
+    if args.running or config.job_states[job['JobStatus']] == 'C':
       try:
         x = float(job.get('wallhr'))
         sites[site]['wallhr'].append(x)
@@ -365,7 +365,7 @@ def condor_exit_code_summary(args):
   tot = sum(x.values())
   ret = '\nExit Code Summary:\n'
   ret += '------------------------------------------------\n'
-  ret += '\n'.join(['%4s  %8d %6.2f%%  %s'%(k,v,v/tot*100,exit_codes.get(k)) for k,v in x.items()])
+  ret += '\n'.join(['%4s  %8d %6.2f%%  %s'%(k,v,v/tot*100,config.exit_codes.get(k)) for k,v in x.items()])
   return ret + '\n'
 
 def condor_efficiency_summary():
